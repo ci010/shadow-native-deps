@@ -42,7 +42,13 @@ jobs:
         run: sudo apt-get update && sudo apt-get install --yes autoconf automake autopoint libtool pkg-config libssl-dev g++ make
       - if: runner.os == 'Windows'
         shell: msys2 {0}
-        run: bash scripts/build-aria2-native.sh .aria2-source bundle
+        env:
+          # Autoconf 2.73 emits invalid shell for upstream wslay's raw case block.
+          WANT_AUTOCONF: '2.71'
+          WANT_AUTOMAKE: '1.16'
+        run: |
+          test "$(autoconf --version | head -1)" = 'autoconf (GNU Autoconf) 2.71'
+          bash scripts/build-aria2-native.sh .aria2-source bundle
       - if: runner.os != 'Windows'
         run: bash scripts/build-aria2-native.sh .aria2-source bundle
       - if: runner.os == 'Windows'

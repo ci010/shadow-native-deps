@@ -16,3 +16,5 @@ Each archive contains `aria2c` (or `.exe`), `aria2-1.37.0-source.tar.gz`, `COPYI
 ## Maintenance
 
 Update the source revision in both script and workflow, review upstream license/security changes, and increment the `shadow.N` recipe suffix for any recipe/toolchain change. Never replace published assets. Run the workflow manually, inspect all native gates and release checksums, then update Shadow's pinned lock using actual published digests. Source revision is immutable, but hosted runner images and package versions evolve: this recipe does not promise bit-for-bit reproducibility. GitHub run logs identify the actual build environment. Only the release job receives contents-write permission; checkouts do not persist credentials.
+
+Windows Autotools are selected explicitly with `WANT_AUTOCONF=2.71` and `WANT_AUTOMAKE=1.16` (provided by the MSYS2 versioned packages). Autoconf 2.73 generates invalid shell in the unmodified upstream wslay configure script; the release gate checks the chosen version rather than patching pinned aria2 source.
