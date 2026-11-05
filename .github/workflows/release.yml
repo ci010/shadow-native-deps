@@ -1,0 +1,82 @@
+name: Release aria2
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: aria2-1.37.0-shadow.1
+  cancel-in-progress: false
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {runner: windows-latest, platform: win32, arch: x64}
+          - {runner: macos-15, platform: darwin, arch: arm64}
+          - {runner: macos-15-intel, platform: darwin, arch: x64}
+          - {runner: ubuntu-22.04, platform: linux, arch: x64}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: aria2/aria2
+          ref: 02f2d0d8472b3c38c29b4dba8c75ebd5fdd2899a
+          path: .aria2-source
+          persist-credentials: false
+      - uses: msys2/setup-msys2@v2
+        if: runner.os == 'Windows'
+        with:
+          msystem: MINGW64
+          update: true
+          install: git autoconf automake libtool make gettext-devel mingw-w64-x86_64-toolchain mingw-w64-x86_64-openssl
+      - if: runner.os == 'macOS'
+        run: |
+          brew install autoconf automake libtool pkg-config gettext
+          echo "$(brew --prefix gettext)/bin" >> "$GITHUB_PATH"
+      - if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install --yes autoconf automake autopoint libtool pkg-config libssl-dev g++ make
+      - if: runner.os == 'Windows'
+        shell: msys2 {0}
+        run: bash scripts/build-aria2-native.sh .aria2-source bundle
+      - if: runner.os != 'Windows'
+        run: bash scripts/build-aria2-native.sh .aria2-source bundle
+      - name: Validate architecture, version, runtime dependencies and complete bundle
+        run: node scripts/verify.mjs ${{ matrix.platform }} ${{ matrix.arch }}
+      - name: Archive and checksum
+        shell: bash
+        run: |
+          mkdir output
+          tar -czf output/aria2-1.37.0-shadow.1-${{ matrix.platform }}-${{ matrix.arch }}.tar.gz -C bundle .
+          node --input-type=module -e "import{readFileSync,writeFileSync}from'node:fs';import{createHash}from'node:crypto';const p='output/aria2-1.37.0-shadow.1-${{ matrix.platform }}-${{ matrix.arch }}.tar.gz';writeFileSync(p+'.sha256',createHash('sha256').update(readFileSync(p)).digest('hex')+'  '+p.slice(7)+'\\n')"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: aria2-${{ matrix.platform }}-${{ matrix.arch }}
+          path: output/*
+          if-no-files-found: error
+  release:
+    needs: build
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: output
+          merge-multiple: true
+      - name: Verify all platforms and publish once
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          cd output
+          test "$(find . -name '*.tar.gz' | wc -l)" -eq 4
+          for target in win32-x64 darwin-arm64 darwin-x64 linux-x64; do
+            test -f "aria2-1.37.0-shadow.1-$target.tar.gz"
+          done
+          sha256sum -c *.sha256
+          gh release create aria2-1.37.0-shadow.1 --target "$GITHUB_SHA" --title 'aria2 1.37.0 — Shadow recipe 1' --notes 'Pinned aria2 source 02f2d0d8472b3c38c29b4dba8c75ebd5fdd2899a. Each archive contains binary, corresponding source, licenses and build script. See repository README for build and maintenance details.' *.tar.gz *.sha256
