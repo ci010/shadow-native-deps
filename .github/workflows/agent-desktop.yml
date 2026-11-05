@@ -1,0 +1,77 @@
+name: Release agent-desktop
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: agent-desktop-0.10.1-shadow.1
+  cancel-in-progress: false
+env:
+  GIT_CONFIG_COUNT: '1'
+  GIT_CONFIG_KEY_0: core.autocrlf
+  GIT_CONFIG_VALUE_0: 'false'
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {runner: windows-2025, arch: x64}
+          - {runner: windows-11-arm, arch: arm64}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.15.0'
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: ${{ matrix.arch }}
+      - name: Pin Rust compiler without changing global defaults
+        run: |
+          rustup toolchain install 1.94.0 --profile minimal
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          'RUSTUP_TOOLCHAIN=1.94.0' >> $env:GITHUB_ENV
+          rustup --version
+          rustc --version
+          node --version
+          dotnet --info
+      - name: Build, test and bundle complete corresponding source
+        run: node scripts/build-agent-desktop.mjs ${{ matrix.arch }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: agent-desktop-win32-${{ matrix.arch }}
+          path: |
+            agent-desktop-0.10.1-shadow.1-*.tar.gz
+            agent-desktop-0.10.1-shadow.1-*.sha256
+          if-no-files-found: error
+  release:
+    needs: build
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: agent-desktop-win32-*
+          merge-multiple: true
+          path: release
+      - name: Verify complete native matrix and publish immutable version
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          COMMIT: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          cd release
+          test "$(find . -name '*.tar.gz' | wc -l)" -eq 2
+          for arch in x64 arm64; do
+            test -s agent-desktop-0.10.1-shadow.1-win32-$arch.tar.gz
+            sha256sum --check agent-desktop-0.10.1-shadow.1-win32-$arch.tar.gz.sha256
+          done
+          # Refuse replacing an existing release or tag.
+          if gh api repos/$GH_REPO/git/ref/tags/agent-desktop-0.10.1-shadow.1 >/dev/null 2>&1; then exit 1; fi
+          gh release create agent-desktop-0.10.1-shadow.1 --target "$COMMIT" --title 'agent-desktop 0.10.1 / Shadow recipe 1' --notes 'Native Windows x64 and ARM64 addon + input guard. Pinned upstream, owned Apache-2.0 patches, full registry dependency sources/licenses, recipe and provenance included. No live desktop action tests; unsigned. Requires Windows .NET Framework 4 and compatible MSVC runtime. See corresponding recipe/source and CI for limitations.' *.tar.gz *.sha256
