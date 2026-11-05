@@ -45,6 +45,11 @@ jobs:
         run: bash scripts/build-aria2-native.sh .aria2-source bundle
       - if: runner.os != 'Windows'
         run: bash scripts/build-aria2-native.sh .aria2-source bundle
+      - if: runner.os == 'Windows'
+        shell: msys2 {0}
+        run: bash scripts/notices.sh
+      - if: runner.os != 'Windows'
+        run: bash scripts/notices.sh
       - name: Validate architecture, version, runtime dependencies and complete bundle
         run: node scripts/verify.mjs ${{ matrix.platform }} ${{ matrix.arch }}
       - name: Archive and checksum

@@ -11,5 +11,8 @@ else { assert.equal(data.readUInt32LE(0), 0xfeedfacf); assert.equal(data.readUIn
 // Execute outside MSYS2: catches missing Windows runtime DLLs as well as native loader failures.
 assert.match(execFileSync(bin, ['--version'], { encoding: 'utf8' }), /^aria2 version 1\.37\.0\r?$/m);
 if (platform === 'linux') { const deps = execFileSync('ldd', [bin], {encoding:'utf8'}); console.log(deps); assert(!deps.includes('not found')); }
-if (platform === 'darwin') console.log(execFileSync('otool', ['-L', bin], {encoding:'utf8'}));
-for (const name of ['COPYING', 'LICENSE.OpenSSL', 'build-aria2-native.sh', 'aria2-1.37.0-source.tar.gz']) assert(readFileSync(`bundle/${name}`).length > 0);
+if (platform === 'darwin') {
+  const deps = execFileSync('otool', ['-L', bin], {encoding:'utf8'}); console.log(deps);
+  for (const line of deps.trim().split('\n').slice(1)) assert(/^\s+\/(usr\/lib|System\/Library)\//.test(line), `Non-system macOS dependency: ${line}`);
+}
+for (const name of ['COPYING', 'LICENSE.OpenSSL', 'THIRD-PARTY-NOTICES.txt', 'build-aria2-native.sh', 'aria2-1.37.0-source.tar.gz']) assert(readFileSync(`bundle/${name}`).length > 0);
