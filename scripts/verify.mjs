@@ -15,4 +15,4 @@ if (platform === 'darwin') {
   const deps = execFileSync('otool', ['-L', bin], {encoding:'utf8'}); console.log(deps);
   for (const line of deps.trim().split('\n').slice(1)) assert(/^\s+\/(usr\/lib|System\/Library)\//.test(line), `Non-system macOS dependency: ${line}`);
 }
-for (const name of ['COPYING', 'LICENSE.OpenSSL', 'THIRD-PARTY-NOTICES.txt', 'build-aria2-native.sh', 'aria2-1.37.0-source.tar.gz']) assert(readFileSync(`bundle/${name}`).length > 0);
+for (const name of ['COPYING', 'LICENSE.OpenSSL', 'wslay-autoconf.patch', 'THIRD-PARTY-NOTICES.txt', 'build-aria2-native.sh', 'aria2-1.37.0-source.tar.gz']) assert(readFileSync(`bundle/${name}`).length > 0);
