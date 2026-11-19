@@ -1,0 +1,106 @@
+name: Build LayerFS Node SDK (Linux x64)
+on:
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish a new GitHub prerelease without replacing an existing version (main only)
+        type: boolean
+        default: false
+permissions:
+  contents: read
+concurrency:
+  group: layerfs-node-2.0.0-rc.1-shadow.1
+  cancel-in-progress: false
+env:
+  TAG: layerfs-node-2.0.0-rc.1-shadow.1
+  ASSET_PREFIX: layerfs-node-2.0.0-rc.1-linux-x64-glibc
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Require main in the producer repository for publish requests
+        if: inputs.publish
+        run: test "$GITHUB_REPOSITORY:$GITHUB_REF" = 'ci010/shadow-native-deps:refs/heads/main'
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Build, pack, and test the exact tarball offline on glibc 2.39
+        env:
+          DOCKER_BUILDKIT: '1'
+        run: |
+          set -euo pipefail
+          test "$(uname -m)" = x86_64
+          docker buildx build --platform linux/amd64 --progress plain \
+            --output type=local,dest=dist integrations/layerfs-node
+          cd dist
+          sha256sum --strict -c SHA256SUMS
+          jq --arg repository "$GITHUB_REPOSITORY" --arg commit "$GITHUB_SHA" \
+            --arg run "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/attempts/$GITHUB_RUN_ATTEMPT" \
+            --arg source "$(sha256sum "$ASSET_PREFIX-source.tar.gz" | cut -d' ' -f1)" \
+            '.producer = {repository: $repository, commit: $commit, run: $run} | .sourceBundleSha256 = $source' \
+            provenance.json > provenance.tmp
+          mv provenance.tmp provenance.json
+          sha256sum -- "$ASSET_PREFIX.tgz" "$ASSET_PREFIX-source.tar.gz" call-table.json provenance.json > SHA256SUMS
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: layerfs-node-linux-x64-glibc
+          path: dist/
+          if-no-files-found: error
+          compression-level: 0
+
+  release:
+    needs: build
+    if: inputs.publish && github.repository == 'ci010/shadow-native-deps' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: layerfs-node-linux-x64-glibc
+          path: dist
+      - name: Verify the exact assets and publish a new prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          cd dist
+          payload=("$ASSET_PREFIX.tgz" "$ASSET_PREFIX-source.tar.gz" call-table.json provenance.json)
+          assets=("${payload[@]}" SHA256SUMS)
+          test "$(find . -mindepth 1 -maxdepth 1 | wc -l)" -eq "${#assets[@]}"
+          sha256sum -- "${payload[@]}" | diff -u SHA256SUMS -
+          jq -e --arg sha "$GITHUB_SHA" --arg tag "$TAG" --arg repo "$GH_REPO" \
+            --arg digest "$(sha256sum "$ASSET_PREFIX.tgz" | cut -d' ' -f1)" \
+            '.recipe == $tag and .producer.commit == $sha and .producer.repository == $repo
+             and .artifact.sha256 == $digest and .upstream.commit == "ff114a5265e2b504db437e7514e4ac09c8a6ca70"
+             and .smoke.glibc == "2.39" and .smoke.isolatedHomeStayedEmpty == true' provenance.json
+
+          require_new_tag() {
+            gh api "repos/$GH_REPO/git/matching-refs/tags/$TAG" | \
+              jq -e --arg ref "refs/tags/$TAG" 'type == "array" and all(.[]; .ref != $ref)'
+          }
+          require_new_tag
+          release_tags=$(gh api --paginate "repos/$GH_REPO/releases?per_page=100" --jq '.[].tag_name')
+          if grep -Fxq "$TAG" <<<"$release_tags"; then
+            echo '::error::Release or draft already exists; refusing to replace it.'
+            exit 1
+          fi
+
+          # Upload to a draft first; check GitHub's digests before public visibility.
+          gh release create "$TAG" "${assets[@]}" --target "$GITHUB_SHA" \
+            --draft --prerelease --latest=false --title 'LayerFS Node SDK 2.0.0-rc.1 / Shadow recipe 1' \
+            --notes 'Linux x64 glibc Node SDK only. Built with Debian 12 and tested offline with Node 22.22.0 / glibc 2.39 / OpenSSL 3 on Ubuntu 24.04. Worker/guest bundle is separate and not included. Verify SHA256SUMS and pin the npm tarball digest.'
+          release_id=$(gh release view "$TAG" --json databaseId,isDraft,targetCommitish | \
+            jq -er --arg sha "$GITHUB_SHA" 'select(.isDraft and .targetCommitish == $sha) | .databaseId')
+          [[ "$release_id" =~ ^[0-9]+$ ]]
+          sha256sum -- "${assets[@]}" | awk '{print $2 " sha256:" $1}' | sort > "$RUNNER_TEMP/layerfs-local-digests"
+          gh api "repos/$GH_REPO/releases/$release_id/assets" \
+            --jq '.[] | select(.state == "uploaded") | [.name, .digest] | join(" ")' | sort > "$RUNNER_TEMP/layerfs-uploaded-digests"
+          diff -u "$RUNNER_TEMP/layerfs-local-digests" "$RUNNER_TEMP/layerfs-uploaded-digests"
+          require_new_tag
+          gh api --method PATCH "repos/$GH_REPO/releases/$release_id" -F draft=false -f make_latest=false | \
+            jq -e --arg tag "$TAG" '.tag_name == $tag and .draft == false and .prerelease == true'
+          test "$(gh api "repos/$GH_REPO/git/ref/tags/$TAG" --jq .object.sha)" = "$GITHUB_SHA"

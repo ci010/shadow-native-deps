@@ -13,6 +13,31 @@ The build script is copied from Shadow's `scripts/build-aria2-native.sh`: HTTP(S
 
 Each archive contains `aria2c` (or `.exe`), `aria2-1.37.0-source.tar.gz`, `COPYING`, `LICENSE.OpenSSL`, the exact build script, and `THIRD-PARTY-NOTICES.txt` (including installed Windows toolchain/OpenSSL notices). aria2 is distributed under its bundled GPL license (GPL-2.0-or-later with the exceptions documented in upstream COPYING). Preserve all license notices and corresponding source when redistributing. The aria2 OpenSSL exception and actual dependency notices are included; inspect upstream licenses before downstream redistribution. Build-system packages are installed from the hosted runner's OS package repositories, and are not vendored.
 
+## LayerFS Node SDK 2.0.0-rc.1 / recipe 1
+
+The Linux x86-64 glibc `@layerfs/node` package is built from public LayerFS commit [`ff114a5265e2b504db437e7514e4ac09c8a6ca70`](https://github.com/Ephemeral-AI-Lab/layerfs/commit/ff114a5265e2b504db437e7514e4ac09c8a6ca70). The recipe checks the commit, tree and exact `Cargo.lock`; it does not track a branch or consume an upstream prebuilt addon. It builds with upstream `npm --prefix api run build:native` and packs with upstream `npm pack` in `api/node`. Rust 1.85.1, the Debian 12 amd64 builder image (glibc 2.36), Ubuntu 24.04 amd64 consumer image (glibc 2.39), and the upstream Node 22.22.0 archive (bundling npm 10.9.4) are pinned. The offline build and smoke have no Docker socket or host LayerFS home.
+
+From this repository root, on a native Linux x64 Docker/BuildKit host, with a new output directory:
+
+```sh
+docker buildx build --platform linux/amd64 --progress plain --output type=local,dest=dist integrations/layerfs-node
+(cd dist && sha256sum --strict -c SHA256SUMS)
+```
+
+The Ubuntu smoke installs only the packed tarball into a fresh npm project, without networking, lifecycle scripts, or `LAYERFS_NATIVE`. It tests ELF loader resolution and the real import, validates and exports the native call table, calls `machine.platforms()` and checks that the isolated home stays empty. This qualifies the SDK import and discovery on **Ubuntu 24.04 glibc 2.39 / OpenSSL 3 / Node 22.22.0**. Building on glibc 2.36 and recording the highest referenced ELF symbol do not lower Shadow's glibc >= 2.39 manifest policy or establish compatibility with every distro, Node version or OS. Both `libssl.so.3` and `libcrypto.so.3` must resolve. No musl, other arch/OS, Windows CLI or DSH compatibility is claimed.
+
+`.github/workflows/layerfs-node.yml` is manual; `publish=false` (default) produces only the `layerfs-node-linux-x64-glibc` Actions artifact. After reviewing that run, use `publish=true` on `main` to rebuild, requalify and release. Only the release job receives contents-write. It rejects existing tags and releases (including drafts), checks the new draft's uploaded hashes before publishing and never replaces an asset. The repo does not enforce GitHub's repository-wide Immutable Releases setting; this recipe follows a publish-once convention, not a platform-enforced guarantee. If a failed attempt leaves a draft, inspect it before trying again; the workflow will not replace it. Recipe or toolchain changes require a new `shadow.N` tag. Do not lock hashes from build-only output: download the actual published asset and independently compute/record its SHA-256 in Shadow.
+
+Expected release tag: `layerfs-node-2.0.0-rc.1-shadow.1`. Under `https://github.com/ci010/shadow-native-deps/releases/download/layerfs-node-2.0.0-rc.1-shadow.1/`:
+
+- `layerfs-node-2.0.0-rc.1-linux-x64-glibc.tgz` — npm package with upstream MIT `LICENSE`, declarations, and addon.
+- `call-table.json` — structured native SDK families and calls from the installed package, not from a CLI help scrape.
+- `provenance.json` — source and lock identity, build/toolchain, addon and tarball SHA-256, ABI/loader/smoke results, and CI producer/run identity when built in Actions.
+- `layerfs-node-2.0.0-rc.1-linux-x64-glibc-source.tar.gz` — pinned LayerFS source archive, build recipe, exact lock and locked Cargo sources with shipped licenses (includes packages outside the addon graph), linked system-library notices, and the actual addon Cargo tree. System libraries are not bundled; preserve applicable notices when redistributing. The Cargo source copy is for distribution/inspection and is not substituted into the upstream build.
+- `SHA256SUMS` — digest of every payload above.
+
+This is the host SDK only. Any worker-backed workspace test needs a separately produced and verified sealed Linux guest bundle from the same upstream pin (see upstream `tools/linux_bundle.py` and its `bundle.json` protocol/platform/hash contract). The smoke neither creates a machine nor qualifies guest/workspace operation. Do not substitute an unrelated CLI or reuse an existing Shadow runtime/home for the workspace acceptance test.
+
 ## Maintenance
 
 Update the source revision in both script and workflow, review upstream license/security changes, and increment the `shadow.N` recipe suffix for any recipe/toolchain change. Never replace published assets. Run the workflow manually, inspect all native gates and release checksums, then update Shadow's pinned lock using actual published digests. Source revision is immutable, but hosted runner images and package versions evolve: this recipe does not promise bit-for-bit reproducibility. GitHub run logs identify the actual build environment. Only the release job receives contents-write permission; checkouts do not persist credentials.
